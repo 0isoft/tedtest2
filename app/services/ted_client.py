@@ -1,6 +1,6 @@
 import httpx
 from app.core.config import settings
-
+import time
 
 class TedClient:
     def __init__(self):
@@ -26,11 +26,18 @@ class TedClient:
             "Authorization": f"Bearer {self.api_key}", 
         }
 
-        response = httpx.post(url, json=payload, headers=headers)
+        for attempt in range(5):  # retry loop
+            response = httpx.post(url, json=payload, headers=headers)
 
-        print("STATUS:", response.status_code)
-        print("BODY:", response.text[:500])
+            if response.status_code == 429:
+                wait = 2 ** attempt  # exponential backoff
+                print(f"Rate limited. Sleeping {wait}s...")
+                time.sleep(wait)
+                continue
 
-        response.raise_for_status()
+            response.raise_for_status()
+            return response.json()
 
-        return response.json()
+        raise Exception("Failed after retries (rate limit)")
+
+        
