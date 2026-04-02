@@ -14,7 +14,7 @@ class Requirement(Base):
     type = Column(String)
     text = Column(Text)
 
-    source = Column(String)  # ted / pdf / manual
+    source = Column(String)  # ted/pdf/manual
     extra_data = Column(JSON)
 
     opportunity = relationship("Opportunity", back_populates="requirements")

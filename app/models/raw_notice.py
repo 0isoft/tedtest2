@@ -3,6 +3,7 @@ from sqlalchemy.dialects.postgresql import UUID
 import uuid
 from datetime import datetime
 from app.core.database import Base
+from sqlalchemy import Boolean
 
 
 class RawNotice(Base):
@@ -18,3 +19,4 @@ class RawNotice(Base):
     raw_payload = Column(JSON, nullable=False)
 
     ingested_at = Column(DateTime, default=datetime.utcnow)
+    processed = Column(Boolean, default=False, index=True)

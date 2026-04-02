@@ -29,6 +29,20 @@ services:
     container_name: ted_redis
     ports:
       - "6379:6379"
+  worker:
+    build: .
+    command: python -m app.worker.worker
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - .:/app
+  ingestion_worker:
+    build: .
+    command: python -m app.worker.ingestion_worker
+    depends_on:
+      - db
+    restart: always
 
 volumes:
   postgres_data:
