@@ -6,6 +6,8 @@ import time
 import traceback
 from sqlalchemy.exc import OperationalError
 from sqlalchemy import text
+from app.core.database import Base, engine
+
 
 #sometimes service would start before postgres can accept connections, sothis is needed
 def wait_for_db():
@@ -23,6 +25,7 @@ def wait_for_db():
 def run_ingestion_worker():
     print("Ingestion worker started", flush=True)
     wait_for_db() 
+    #Base.metadata.create_all(bind=engine)
     while True:
         db = SessionLocal()
 

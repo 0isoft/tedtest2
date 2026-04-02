@@ -9,3 +9,4 @@ httpx
 pydantic_settings
 alembic
 redis
+lxml

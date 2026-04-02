@@ -29,9 +29,17 @@ class TedClient:
             "query": query,
             "limit": limit,
             "paginationMode": "ITERATION",
-            "fields": ["publication-number", "BT-24-Procedure"]
+            "fields": [
+                "publication-number",
+                "BT-21-Procedure",
+                "BT-23-Procedure",
+                "BT-24-Procedure",
+                "BT-26(a)-Procedure",
+                "BT-26(m)-Procedure",
+                "organisation-country-buyer"
+            ]
         }
-
+        #"fields": ["BT-21","BT-23","BT-26","publication-number", "BT-24-Procedure"]
         if iteration_token:
             payload["iterationNextToken"] = iteration_token
 
@@ -42,8 +50,8 @@ class TedClient:
 
         response = httpx.post(url, json=payload, headers=headers)
         print("STATUS:", response.status_code)
-        print("RESPONSE:", response.text[:1000]) 
-        
+        print("RESPONSE:", response.text) 
+
         # handle rate limit ONCE (not spam loop)
         if response.status_code == 429:
             retry_after = response.headers.get("Retry-After", 60)

@@ -43,6 +43,12 @@ services:
     depends_on:
       - db
     restart: always
+  migrations:
+    build: .
+    command: alembic upgrade head
+    depends_on:
+      - db
 
 volumes:
   postgres_data:
+
