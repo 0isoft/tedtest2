@@ -50,7 +50,7 @@ class TedClient:
 
         response = httpx.post(url, json=payload, headers=headers)
         print("STATUS:", response.status_code)
-        print("RESPONSE:", response.text) 
+        print("RESPONSE:", response.text[:100]) 
 
         # handle rate limit ONCE (not spam loop)
         if response.status_code == 429:

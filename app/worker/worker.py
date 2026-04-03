@@ -9,7 +9,6 @@ from datetime import datetime
 from app.core.queue import enqueue_notice
 import httpx
 from lxml import etree
-import re
 
 class TokenBucket:
     def __init__(self, rate, capacity):
@@ -49,6 +48,14 @@ NS = {
     "efac": "http://data.europa.eu/p27/eforms-ubl-extension-aggregate-components/1",
     "efbc": "http://data.europa.eu/p27/eforms-ubl-extension-basic-components/1",
 }
+REQUIRED_FIELDS = ["title", "description"]
+
+OPTIONAL_FIELDS = [
+    "buyer_country",
+    "estimated_value",
+    "currency",
+    "deadline"
+]
 
 def parse_date(value: str): 
     if not value: return None 
@@ -90,79 +97,166 @@ def fetch_xml(xml_bucket, url: str):
         print(f"[XML FETCH ERROR] {e}")
         return None
     
+#########################################
 
-def parse_xml_to_opportunity(xml_bytes):
-    try:
-        root = etree.fromstring(xml_bytes)
-    except Exception as e:
-        print(f"[XML PARSE ERROR] {e}")
-        return None
+def extract_title(root):
+    paths = [
+        ".//cac:ProcurementProject/cbc:Name",
+        ".//cac:ProcurementProjectLot//cbc:Name",
+    ]
 
-    def gettext(path):
-        return root.findtext(path, namespaces=NS)
+    for p in paths:
+        val = root.findtext(p, namespaces=NS)
+        if val:
+            return val
 
-    def getnode(path):
-        return root.find(path, namespaces=NS)
+    return None    
 
-    # --- BASIC ---
-    title = gettext(".//cbc:Name")
-    description = gettext(".//cbc:Description")
+def extract_description(root):
+    paths = [
+        ".//cac:ProcurementProject/cbc:Description",
+        ".//cac:ProcurementProjectLot//cbc:Description",
+    ]
 
-    country = gettext(".//cbc:IdentificationCode")
+    for p in paths:
+        val = root.findtext(p, namespaces=NS)
+        if val:
+            return val
 
-    # --- VALUE ---
-    value_node = getnode(".//cbc:TotalAmount")
-    if value_node is None:
-        value_node = getnode(".//efbc:FrameworkMaximumAmount")
+    return None
 
-    estimated_value = float(value_node.text) if value_node is not None else None
-    currency = value_node.get("currencyID") if value_node is not None else None
+def extract_value(root):
+    paths = [
+        ".//cbc:EstimatedOverallContractAmount",
+        ".//cbc:TotalAmount",
+        ".//efbc:FrameworkMaximumAmount"
+    ]
 
-    # --- DEADLINE ---
-    deadline = gettext(".//cbc:EndDate")
+    for p in paths:
+        node = root.find(p, namespaces=NS)
+        if node is not None and node.text:
+            try:
+                value = float(node.text.strip())
+                currency = node.get("currencyID")
+                return value, currency
+            except:
+                continue
 
-    # --- LOTS ---
+    return None, None
+
+def extract_deadline(root):
+    paths = [
+        ".//cac:TenderSubmissionDeadlinePeriod/cbc:EndDate",
+        ".//cbc:EndDate"
+    ]
+
+    for p in paths:
+        val = root.findtext(p, namespaces=NS)
+        if val:
+            return val
+
+    return None
+
+def extract_selection_criteria(root):
+    results = []
+
+    for sc in root.findall(".//efac:SelectionCriteria", namespaces=NS):
+        desc = sc.findtext(".//cbc:Description", namespaces=NS)
+        if desc:
+            results.append({
+                "text": desc,
+                "type": "eligibility"
+            })
+
+    return results
+
+def extract_award_criteria(root):
+    results = []
+
+    for c in root.findall(".//cac:AwardingCriterion", namespaces=NS):
+        desc = c.findtext(".//cbc:Description", namespaces=NS)
+
+        if desc and desc.strip():
+            results.append({
+                "text": desc.strip(),
+                "type": "award"
+            })
+
+    return results
+
+def extract_requirements(root):
+
+    return (
+        extract_selection_criteria(root) +   
+        extract_award_criteria(root)         
+    )
+
+def extract_country(root):
+    paths = [
+        # BEST: contracting authority
+        ".//cac:ContractingParty//cbc:IdentificationCode",
+
+        # fallback: project location
+        ".//cac:ProcurementProject//cbc:IdentificationCode",
+    ]
+
+    for p in paths:
+        val = root.findtext(p, namespaces=NS)
+        if val:
+            return val
+
+    return None
+
+
+def extract_lots(root):
     lots = []
+
     lot_nodes = root.findall(".//cac:ProcurementProjectLot", namespaces=NS)
 
     for lot in lot_nodes:
         lot_id = lot.findtext(".//cbc:ID", namespaces=NS)
         lot_name = lot.findtext(".//cbc:Name", namespaces=NS)
+        lot_desc = lot.findtext(".//cbc:Description", namespaces=NS)
 
-        lot_value = lot.findtext(".//efbc:FrameworkMaximumAmount", namespaces=NS)
+        # value (optional per lot)
+        value_node = lot.find(".//cbc:EstimatedOverallContractAmount", namespaces=NS)
+        lot_value = None
+        currency = None
+
+        if value_node is not None and value_node.text:
+            try:
+                lot_value = float(value_node.text)
+                currency = value_node.get("currencyID")
+            except:
+                pass
 
         lots.append({
             "id": lot_id,
             "name": lot_name,
-            "value": float(lot_value) if lot_value else None
+            "description": lot_desc,
+            "value": lot_value,
+            "currency": currency
         })
 
-    # --- REQUIREMENTS ---
-    requirements = []
+    return lots
+    
+def parse_xml(xml_bytes):
+    return etree.fromstring(xml_bytes)
 
-    criteria_nodes = root.findall(".//cac:AwardingCriterion", namespaces=NS)
-
-    for c in criteria_nodes:
-        desc = c.findtext(".//cbc:Description", namespaces=NS)
-        expr = c.findtext(".//cbc:CalculationExpression", namespaces=NS)
-
-        if desc or expr:
-            requirements.append({
-                "text": desc or expr,
-                "type": "award_criteria"
-            })
+def extract_opportunity(root):
+    value, currency = extract_value(root)
 
     return {
-        "title": title,
-        "description": description,
-        "buyer_country": country,
-        "estimated_value": estimated_value,
+        "title": extract_title(root),
+        "description": extract_description(root),
+        "buyer_country": extract_country(root),
+        "estimated_value": value,
         "currency": currency,
-        "deadline": deadline,
-        "lots": lots,
-        "requirements": requirements
+        "deadline": extract_deadline(root),
+        "lots": extract_lots(root),
+        "requirements": extract_requirements(root)
     }
-
+    
 
 def process_notice(db, notice_id, xml_bucket):
     notice = db.query(RawNotice).filter_by(id=notice_id).first()
@@ -188,7 +282,8 @@ def process_notice(db, notice_id, xml_bucket):
         enqueue_notice(str(notice.id))#this will be a landmine since sth will always stay in the queue
         return
 
-    parsed = parse_xml_to_opportunity(xml_bytes)
+    root = parse_xml(xml_bytes)
+    parsed = extract_opportunity(root)
     if not parsed:
         enqueue_notice(str(notice.id))
         return
