@@ -1,13 +1,12 @@
 import redis
 
-r = redis.Redis(host="redis", port=6379, decode_responses=True)
+class RedisQueue:
+    def __init__(self, url: str, queue_name: str):
+        self.client = redis.Redis.from_url(url, decode_responses=True)
+        self.queue_name = queue_name
 
-QUEUE_NAME = "raw_notice_queue"
+    def enqueue(self, notice_id: str):
+        self.client.lpush(self.queue_name, notice_id)
 
-
-def enqueue_notice(notice_id: str):
-    r.lpush(QUEUE_NAME, notice_id)
-
-
-def dequeue_notice():
-    return r.rpop(QUEUE_NAME)
+    def dequeue(self):
+        return self.client.rpop(self.queue_name)

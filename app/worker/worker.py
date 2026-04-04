@@ -1,14 +1,14 @@
 import time
-from app.core.queue import dequeue_notice
 from app.core.database import SessionLocal
 from app.models.raw_notice import RawNotice
 from app.models.opportunity import Opportunity
 from app.models.opportunity_update import OpportunityUpdate
 from app.models.requirement import Requirement
 from datetime import datetime
-from app.core.queue import enqueue_notice
 import httpx
 from lxml import etree
+from app.core.queue import RedisQueue
+from app.core.config import settings
 
 class TokenBucket:
     def __init__(self, rate, capacity):
@@ -258,7 +258,7 @@ def extract_opportunity(root):
     }
     
 
-def process_notice(db, notice_id, xml_bucket):
+def process_notice(queue, db, notice_id, xml_bucket):
     notice = db.query(RawNotice).filter_by(id=notice_id).first()
 
     if not notice or notice.processed:
@@ -276,16 +276,17 @@ def process_notice(db, notice_id, xml_bucket):
         return
 
     xml_bytes = fetch_xml(xml_bucket, xml_url)
+    print(xml_bytes[:500])
 
     if not xml_bytes:
         print("XML fetch failed, should retry later")
-        enqueue_notice(str(notice.id))#this will be a landmine since sth will always stay in the queue
+        queue.enqueue(str(notice.id))#this will be a landmine since sth will always stay in the queue
         return
 
     root = parse_xml(xml_bytes)
     parsed = extract_opportunity(root)
     if not parsed:
-        enqueue_notice(str(notice.id))
+        queue.enqueue(str(notice.id))
         return
 
     
@@ -337,9 +338,9 @@ def process_notice(db, notice_id, xml_bucket):
 def worker_loop():
     print("Worker started...")
     xml_bucket = TokenBucket(rate=1/2, capacity=2)  
-
+    queue = RedisQueue(settings.REDIS_URL, "raw_notice_queue")
     while True:
-        notice_id = dequeue_notice()
+        notice_id = queue.dequeue()
 
         if not notice_id:
             time.sleep(1)
@@ -348,7 +349,7 @@ def worker_loop():
         db = SessionLocal()
 
         try:
-            process_notice(db, notice_id, xml_bucket)
+            process_notice(queue, db, notice_id, xml_bucket)
         finally:
             db.close()
 

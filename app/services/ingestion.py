@@ -1,9 +1,13 @@
 from app.services.ted_client import TedClient
+from app.core.config import settings
 from app.models.raw_notice import RawNotice
 from sqlalchemy.orm import Session
 from datetime import date, timedelta
-from app.core.queue import enqueue_notice
 from app.models.ingestion_state import IngestionState
+from app.repositories.ingestion_repository import (
+    RawNoticeRepository,
+    IngestionStateRepository,
+)
 import time
 
 def build_query(country: str):
@@ -70,71 +74,48 @@ def save_token(db: Session, token: str):
 
 #bucket = TokenBucket(rate=1/60, capacity=1)  # 1 req/min
 
-def fetch_and_store_notices(db: Session, country: str):
-    print("step 1: bucket", flush=True)
-    bucket = TokenBucket(rate=1/60, capacity=1)
-
-
-    print("step 2: client", flush=True)
-    client = TedClient(bucket)
-
-    print("step 3: query", flush=True)
+def fetch_and_store_notices(
+    client,
+    raw_repo: RawNoticeRepository,
+    state_repo: IngestionStateRepository,
+    queue,
+    country: str,
+):
     query = build_query(country)
+    token = state_repo.load_token()
 
-    print("step 4: load token", flush=True)
-    token = load_token(db)
-    print("step 5: token loaded", token, flush=True)
-    total_inserted = 0
-
-    print(f"Fetching ONE batch with token={token}")
-
+    print("Calling TED...", flush=True)
     data = client.search_notices(
         query=query,
         limit=50,
         iteration_token=token
     )
+    print("Calling TED...", flush=True)
 
     if not data:
-        print("No data returned (rate limited or empty)")
+        print("No data returned from TED (rate limited or empty)", flush=True)
         return 0
 
     notices = data.get("notices", [])
+    total_inserted = 0
 
     for notice in notices:
         external_id = notice.get("publication-number")
-        print("EXTERNAL ID:", external_id)
-        print("EXISTS:", db.query(RawNotice).filter_by(external_id=external_id).first())
 
-        exists = db.query(RawNotice).filter_by(
-            external_id=external_id
-        ).first()
-
-        if exists:
+        if raw_repo.exists(external_id):
             continue
 
-        raw_notice = RawNotice(
-            external_source="TED",
-            external_id=external_id,
-            country=country,
-            raw_payload=notice,
-        )
+        raw_notice = raw_repo.create(notice, country)
 
-        db.add(raw_notice)
-        db.flush()
+        queue.enqueue(str(raw_notice.id))
 
-        enqueue_notice(str(raw_notice.id))
         total_inserted += 1
-        total_seen = len(notices)
-        total_skipped = total_seen - total_inserted
-        print(f"Seen: {total_seen}, Inserted: {total_inserted}, Skipped: {total_skipped}")
+    print("NOTICES:", len(notices), flush=True)
+    raw_repo.commit()
 
-    db.commit()
-
-    next_token = data.get("iterationNextToken")    # persist NEXT iterationtoken
+    next_token = data.get("iterationNextToken")
 
     if next_token:
-        save_token(db, next_token)
-
-    print(f"Inserted {total_inserted} notices")
-
+        state_repo.save_token(next_token)
+    time.sleep(60)
     return total_inserted

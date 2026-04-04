@@ -34,3 +34,8 @@ def get_opportunities(
 def get_opportunity(id: str, db: Session = Depends(get_db)):
     return db.query(Opportunity).filter_by(id=id).first()
 
+
+@router.get("/opportunities/external/{external_id}")
+def get_opportunity(external_id: str, db: Session = Depends(get_db)):
+    return db.query(Opportunity).filter_by(external_id=external_id).first()
+

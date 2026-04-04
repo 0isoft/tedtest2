@@ -1,5 +1,5 @@
 import httpx
-from app.core.config import settings
+
 import time
 
 #idea: we can use that iteration token to fetch a small amount of stuff every once in a while.
@@ -15,10 +15,12 @@ import time
 
 
 class TedClient:
-    def __init__(self, rate_limiter):
-        self.base_url = settings.TED_BASE_URL
-        self.api_key = settings.TED_API_KEY
+    def __init__(self, base_url, api_key, rate_limiter, http_client):
+        self.base_url = base_url
+        self.api_key = api_key
         self.rate_limiter = rate_limiter
+        self.http=http_client
+        
 
     def search_notices(self, query, limit=10, iteration_token=None):
         self.rate_limiter.wait_for_token()
