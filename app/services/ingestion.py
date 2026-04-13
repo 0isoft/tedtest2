@@ -10,11 +10,19 @@ from app.repositories.ingestion_repository import (
 )
 import time
 
-def build_query(country: str):
+def build_query(country: str, cpv_code: str | None = None):
     #query = return all notifications from given country, posted within last week
     today = date.today() 
     week_ago = today - timedelta(days=10)
-    return ( f"buyer-country={country} " f"AND publication-date>={week_ago.strftime('%Y%m%d')}" )
+    parts = [
+        f"buyer-country={country}",
+        f"publication-date>={week_ago.strftime('%Y%m%d')}"
+    ]
+
+    if cpv_code:
+        parts.append(f"classification-cpv={cpv_code}")
+
+    return " AND ".join(parts)
 
 #this for rate limiting
 class TokenBucket:
@@ -52,23 +60,8 @@ class TokenBucket:
 #this for iteration token
 
 # loop = fetch one page of ted notifications, save them to db to be further fed into the redis queue
-# after fetching a page, store the iteration token, then sleep
+# after fetching a page, store the iteration token for each config, then sleep
 # the iteration token is stored in the db
-def load_token(db: Session):
-    state = db.query(IngestionState).filter_by(source="ted").first()
-    return state.iteration_token if state else None
-
-
-def save_token(db: Session, token: str):
-    state = db.query(IngestionState).filter_by(source="ted").first()
-
-    if not state:
-        state = IngestionState(source="ted", iteration_token=token)
-        db.add(state)
-    else:
-        state.iteration_token = token
-
-    db.commit()
 
 
 
@@ -79,12 +72,14 @@ def fetch_and_store_notices(
     raw_repo: RawNoticeRepository,
     state_repo: IngestionStateRepository,
     queue,
+    config_id,
     country: str,
+    cpv_code: str | None = None, 
 ):
-    query = build_query(country)
-    token = state_repo.load_token()
+    query = build_query(country, cpv_code)
+    token = state_repo.load_token(config_id)
 
-    print("Calling TED...", flush=True)
+    print(f"Calling TED with query: {query}", flush=True)
     data = client.search_notices(
         query=query,
         limit=50,
@@ -92,12 +87,21 @@ def fetch_and_store_notices(
     )
     print("Calling TED...", flush=True)
 
-    if not data:
-        print("No data returned from TED (rate limited or empty)", flush=True)
+    if data is None:# rate limited=retry later
         return 0
 
-    notices = data.get("notices", [])
+    if "notices" not in data:
+        raise ValueError("Malformed TED response")
+
+    notices = data["notices"]
+    if not notices:
+        return 0
+
     total_inserted = 0
+
+    next_token = data.get("iterationNextToken")
+    if next_token:
+        state_repo.save_token(config_id, next_token)
 
     for notice in notices:
         external_id = notice.get("publication-number")
@@ -112,10 +116,7 @@ def fetch_and_store_notices(
         total_inserted += 1
     print("NOTICES:", len(notices), flush=True)
     raw_repo.commit()
-
-    next_token = data.get("iterationNextToken")
-
-    if next_token:
-        state_repo.save_token(next_token)
-    time.sleep(60)
+    
+    if total_inserted == 0:
+        time.sleep(30)
     return total_inserted

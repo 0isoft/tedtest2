@@ -6,7 +6,7 @@ import time
 import traceback
 from sqlalchemy.exc import OperationalError
 from sqlalchemy import text
-from app.core.database import Base, engine
+from app.models.ingestion_config import IngestionConfig,  IngestionControl
 from app.services.ted_client import TedClient
 from app.services.ingestion import TokenBucket
 import httpx
@@ -16,6 +16,8 @@ from app.repositories.ingestion_repository import (
     RawNoticeRepository,
     IngestionStateRepository,
 )
+from datetime import datetime
+
 
 
 
@@ -64,21 +66,58 @@ def run_ingestion_worker():
 
     while True:
         db = SessionLocal()
+        control = db.query(IngestionControl).first()
+
+        if control and control.is_paused:
+            print("Ingestion paused", flush=True)
+            db.close()
+            time.sleep(5)
+            continue
+        
 
         try:
-            raw_repo = RawNoticeRepository(db)
-            state_repo = IngestionStateRepository(db)
+            #pull from the db the configs and picks the highest priority, amonst the ones that is active
+            configs = db.query(IngestionConfig)\
+            .filter_by(is_active=True)\
+            .order_by(IngestionConfig.priority.desc())\
+            .all()
 
-            fetch_and_store_notices(
-                client,
-                raw_repo,
-                state_repo,
-                queue,
-                "ROU"
-            )
+            raw_repo = RawNoticeRepository(db) #this to check if notices exist, create new notices, commit inserts
+            state_repo = IngestionStateRepository(db) #this to handle the ingestion state and iteration token
+            # note that the token changes in between workers swithcing configurations, its not like you can reuse 
+            # it, so we need one ingestionstate per config to hold token for romania, token for romania+cpv, token for belgium
+            
+            # there may be multiple active configs, for several countries and several cpv codes to go through
+            now = datetime.utcnow()
+            for config in configs:
+                
+                #skip configs which were ran recently
+                if config.last_run_at and (
+                    now - config.last_run_at
+                ).total_seconds() < config.interval_seconds:
+                    continue
+                
+                print(f"[INGESTION] Running config {config.id}", flush=True)
+                fetch_and_store_notices(
+                    client=client,
+                    raw_repo=raw_repo,
+                    state_repo=state_repo,
+                    queue=queue,
+                    config_id=config.id,
+                    country=config.country,
+                    cpv_code=config.cpv_code,
+                )
+
+                config.last_run_at = now
+                db.commit()
 
         except Exception:
             traceback.print_exc()
+            db.rollback()
+        finally:
+            db.close()
+
+        time.sleep(5) 
 
 
 if __name__ == "__main__":

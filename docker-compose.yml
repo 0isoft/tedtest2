@@ -43,16 +43,7 @@ services:
     depends_on:
       - db
     restart: always
-  migrations:
-    build: .
-    restart: always
-    command: >
-      sh -c "
-      python -c 'from app.worker.ingestion_worker import wait_for_db; wait_for_db()' &&
-      alembic upgrade head
-      "
-    depends_on:
-      - db
+  
 
 volumes:
   postgres_data:

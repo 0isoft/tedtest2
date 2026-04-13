@@ -30,17 +30,40 @@ class IngestionStateRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def load_token(self, source: str = "ted") -> str | None:
-        state = self.db.query(IngestionState).filter_by(source=source).first()
+    def load_token(self, config_id: int) -> str | None:
+        state = (
+            self.db.query(IngestionState)
+            .filter_by(config_id=config_id)
+            .first()
+        )
         return state.iteration_token if state else None
 
-    def save_token(self, token: str, source: str = "ted"):
-        state = self.db.query(IngestionState).filter_by(source=source).first()
+
+    def save_token(self, config_id: int, token: str):
+        state = (
+            self.db.query(IngestionState)
+            .filter_by(config_id=config_id)
+            .first()
+        )
 
         if not state:
-            state = IngestionState(source=source, iteration_token=token)
+            state = IngestionState(
+                config_id=config_id,
+                iteration_token=token
+            )
             self.db.add(state)
         else:
             state.iteration_token = token
 
-        self.db.commit()
+        
+
+    def reset_token(self, config_id: int):
+        state = (
+            self.db.query(IngestionState)
+            .filter_by(config_id=config_id)
+            .first()
+        )
+
+        if state:
+            self.db.delete(state)
+            
