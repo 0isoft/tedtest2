@@ -17,6 +17,7 @@ from app.repositories.ingestion_repository import (
     IngestionStateRepository,
 )
 from datetime import datetime
+from app.models.raw_notice import RawNotice
 
 
 
@@ -77,6 +78,7 @@ def run_ingestion_worker():
         
 
         try:
+            didingest=False
             #pull from the db the configs and picks the highest priority, amonst the ones that is active
             configs = db.query(IngestionConfig)\
             .filter_by(is_active=True)\
@@ -101,7 +103,7 @@ def run_ingestion_worker():
                 print(f"[INGESTION] Running config {config.id}", flush=True)
 
                 try:
-                    fetch_and_store_notices(
+                    inserted=fetch_and_store_notices(
                         client=client,
                         raw_repo=raw_repo,
                         state_repo=state_repo,
@@ -110,6 +112,7 @@ def run_ingestion_worker():
                         country=config.country,
                         cpv_code=config.cpv_code,
                     )
+                    if inserted>0: didingest=True
 
                     config.last_run_at = now
                     config.failure_count = 0
@@ -125,15 +128,40 @@ def run_ingestion_worker():
                         print(f"[DISABLED CONFIG] {config.id}")
                 finally:
                     db.commit()
+                     
+                
+            # since redis might die at any moment and clear the queue, 
+            # recovery should be possible without discarding the notices which were on the 
+            # queue. for this, whenever queue=[] no matter why that happens, do a quick search
+            # in db for unprocessed notices that are not dead notices and enqueue them again
+            
+            if not didingest and queue.length() == 0:
+                print("[RECOVERY] Queue empty, checking DB...")
+
+                pending = (
+                        db.query(RawNotice)
+                        .filter(RawNotice.processed == False)
+                        .filter(RawNotice.retry_count < 5)
+                        .order_by(RawNotice.ingested_at.asc())
+                        .limit(50)
+                        .all()
+                )
+
+                for notice in pending:
+                    queue.enqueue(str(notice.id))
+
+                if pending:
+                    print(f"[RECOVERY] Re-enqueued {len(pending)} notices")
 
         except Exception:
             traceback.print_exc()
             db.rollback()
         finally:
             db.close()
+        time.sleep(5)
 
-        time.sleep(5) 
 
+        
 
 if __name__ == "__main__":
     run_ingestion_worker()

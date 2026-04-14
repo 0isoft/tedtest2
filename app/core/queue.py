@@ -10,3 +10,12 @@ class RedisQueue:
 
     def dequeue(self):
         return self.client.rpop(self.queue_name)
+    
+    def length(self) -> int:
+        return self.client.llen(self.queue_name)
+    
+    def peek(self, n=5):
+        return self.client.lrange(self.queue_name, 0, n-1)
+    
+    def clear(self):
+        self.client.delete(self.queue_name)

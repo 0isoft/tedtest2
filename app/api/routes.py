@@ -9,6 +9,8 @@ from app.schemas.opportunity import OpportunityOut
 from sqlalchemy import Column, String, DateTime
 
 from sqlalchemy import Boolean,  Integer
+from app.core.dependencies import get_queue
+from app.core.queue import RedisQueue
 
 router = APIRouter()
 
@@ -130,3 +132,16 @@ def resume_ingestion(db: Session = Depends(get_db)):
         db.commit()
 
     return {"status": "running"}
+
+@router.get("/debug/queue-size")
+def queue_size(queue: RedisQueue = Depends(get_queue)):
+    return {"size": queue.length()}
+
+@router.get("/debug/queue-peek")
+def queue_peek(queue: RedisQueue = Depends(get_queue)):
+    return {"items": queue.peek()}
+
+
+@router.get("/debug/queue-obliterate")
+def queue_peek(queue: RedisQueue = Depends(get_queue)):
+    return {"items": queue.clear()}
