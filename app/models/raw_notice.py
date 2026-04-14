@@ -3,7 +3,7 @@ from sqlalchemy.dialects.postgresql import UUID
 import uuid
 from datetime import datetime
 from app.core.database import Base
-from sqlalchemy import Boolean
+from sqlalchemy import Boolean,  Integer
 
 
 class RawNotice(Base):
@@ -20,3 +20,6 @@ class RawNotice(Base):
 
     ingested_at = Column(DateTime, default=datetime.utcnow)
     processed = Column(Boolean, default=False, index=True)
+
+    retry_count = Column(Integer, default=0)
+    last_error = Column(String, nullable=True)

@@ -4,7 +4,7 @@ from datetime import datetime
 from app.core.database import Base
 from sqlalchemy import ForeignKey
 
-
+# this is for state of pagination/continuation, not the health of execution per se. for that, check the ingestion-config
 class IngestionState(Base):
     __tablename__ = "ingestion_state"
 

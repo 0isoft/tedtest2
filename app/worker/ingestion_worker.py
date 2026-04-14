@@ -34,6 +34,7 @@ def wait_for_db():
             print("Waiting for DB...", flush=True)
             time.sleep(2)
 
+
 def wait_for_tables():
     from sqlalchemy import text
 
@@ -98,18 +99,32 @@ def run_ingestion_worker():
                     continue
                 
                 print(f"[INGESTION] Running config {config.id}", flush=True)
-                fetch_and_store_notices(
-                    client=client,
-                    raw_repo=raw_repo,
-                    state_repo=state_repo,
-                    queue=queue,
-                    config_id=config.id,
-                    country=config.country,
-                    cpv_code=config.cpv_code,
-                )
 
-                config.last_run_at = now
-                db.commit()
+                try:
+                    fetch_and_store_notices(
+                        client=client,
+                        raw_repo=raw_repo,
+                        state_repo=state_repo,
+                        queue=queue,
+                        config_id=config.id,
+                        country=config.country,
+                        cpv_code=config.cpv_code,
+                    )
+
+                    config.last_run_at = now
+                    config.failure_count = 0
+                    config.last_error = None
+                except Exception as e:
+                    config.failure_count += 1
+                    config.last_error = str(e)
+
+                    print(f"[CONFIG ERROR] id={config.id} failure={config.failure_count}")
+
+                    if config.failure_count > 3:
+                        config.is_active = False
+                        print(f"[DISABLED CONFIG] {config.id}")
+                finally:
+                    db.commit()
 
         except Exception:
             traceback.print_exc()

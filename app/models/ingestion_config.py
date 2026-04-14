@@ -18,6 +18,7 @@ from sqlalchemy import Boolean,  Integer
 # and then the workers reads the insturctions and fetches notices accordingly
 # (see worker/ingestion_worker.py)
 
+
 class IngestionConfig(Base):
     __tablename__ = "ingestion_config"
 
@@ -37,9 +38,16 @@ class IngestionConfig(Base):
     # optional
     priority = Column(Integer, default=0)
 
+    # properties of the 'query execution'
+    failure_count = Column(Integer, default=0)
+    last_error = Column(String, nullable=True)
+    last_failure_at = Column(DateTime, nullable=True)
 
 
-#this just to toggle worker on/off
+
+
+
+#this just to toggle worker on/off manually
 
 class IngestionControl(Base):
     __tablename__ = "ingestion_control"

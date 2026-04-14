@@ -278,9 +278,19 @@ def process_notice(queue, db, notice_id, xml_bucket):
     xml_bytes = fetch_xml(xml_bucket, xml_url)
     print(xml_bytes[:500])
 
+    maxretries=5
     if not xml_bytes:
         print("XML fetch failed, should retry later")
-        queue.enqueue(str(notice.id))#this will be a landmine since sth will always stay in the queue
+        #queue.enqueue(str(notice.id))#this will be a landmine since sth will always stay in the queue
+        #fixed below
+        notice.retry_count += 1
+        notice.last_error = "xml_fetch_failed"
+        if notice.retry_count < maxretries:
+            queue.enqueue(str(notice.id))
+        else:
+            print(f"[DEAD LETTER] Notice {notice.id} failed permanently")
+
+        db.commit()
         return
 
     root = parse_xml(xml_bytes)
