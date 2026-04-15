@@ -4,6 +4,7 @@ from app.models.raw_notice import RawNotice
 from app.models.opportunity import Opportunity
 from app.models.opportunity_update import OpportunityUpdate
 from app.models.requirement import Requirement
+from app.models.lot import Lot
 from datetime import datetime
 import httpx
 from lxml import etree
@@ -57,11 +58,76 @@ OPTIONAL_FIELDS = [
     "deadline"
 ]
 
-def parse_date(value: str): 
-    if not value: return None 
-    try: 
-        return datetime.fromisoformat(value) 
-    except: return None
+def build_org_map(root):
+    org_map = {}
+
+    for org in root.findall(".//efac:Organization", namespaces=NS):
+        org_id = org.findtext(".//cbc:ID", namespaces=NS)
+        name = org.findtext(".//cac:PartyName/cbc:Name", namespaces=NS)
+
+        if org_id:
+            org_map[org_id] = name
+
+    return org_map
+
+
+def extract_buyer_name(root, org_map):
+    org_id = root.findtext(
+        ".//cac:ContractingParty//cac:PartyIdentification/cbc:ID",
+        namespaces=NS
+    )
+
+    if org_id:
+        return org_map.get(org_id)
+
+    return None
+
+
+def extract_publication_date(root):
+    paths = [
+        ".//efac:Publication/efbc:PublicationDate",
+        ".//cbc:IssueDate"
+    ]
+
+    for p in paths:
+        val = root.findtext(p, namespaces=NS)
+        if val:
+            return val
+
+    return None
+
+def extract_documents_url(root):
+    return root.findtext(
+        ".//cac:CallForTendersDocumentReference//cbc:URI",
+        namespaces=NS
+    )
+
+def extract_deadline(root):
+    return root.findtext(
+        ".//cac:TenderSubmissionDeadlinePeriod/cbc:EndDate",
+        namespaces=NS
+    )
+
+
+
+def parse_date(value: str):
+    if not value:
+        return None
+
+    value = value.strip()
+
+    # Handle date with trailing Z
+    if value.endswith("Z") and "T" not in value:
+        value = value[:-1]
+
+    # If it's date-only with timezone like 2026-03-25+01:00, strip timezone
+    if "T" not in value and len(value) > 10:
+        value = value[:10]
+
+    try:
+        return datetime.fromisoformat(value)
+    except Exception:
+        return None
 
 def extract_xml_url(raw: dict) -> str:
     links = raw.get("links", {})
@@ -144,38 +210,14 @@ def extract_value(root):
 
     return None, None
 
-def extract_deadline(root):
-    paths = [
-        ".//cac:TenderSubmissionDeadlinePeriod/cbc:EndDate",
-        ".//cbc:EndDate"
-    ]
 
-    for p in paths:
-        val = root.findtext(p, namespaces=NS)
-        if val:
-            return val
 
-    return None
 
-def extract_selection_criteria(root):
+def extract_award_criteria(node):
     results = []
 
-    for sc in root.findall(".//efac:SelectionCriteria", namespaces=NS):
-        desc = sc.findtext(".//cbc:Description", namespaces=NS)
-        if desc:
-            results.append({
-                "text": desc,
-                "type": "eligibility"
-            })
-
-    return results
-
-def extract_award_criteria(root):
-    results = []
-
-    for c in root.findall(".//cac:AwardingCriterion", namespaces=NS):
+    for c in node.findall(".//cac:AwardingCriterion", namespaces=NS):
         desc = c.findtext(".//cbc:Description", namespaces=NS)
-
         if desc and desc.strip():
             results.append({
                 "text": desc.strip(),
@@ -184,20 +226,24 @@ def extract_award_criteria(root):
 
     return results
 
-def extract_requirements(root):
+def extract_global_requirements(root):
+    results = []
 
-    return (
-        extract_selection_criteria(root) +   
-        extract_award_criteria(root)         
-    )
+    top_tendering_terms = root.findall("./cac:TenderingTerms", namespaces=NS)
+    for tt in top_tendering_terms:
+        results.extend(extract_selection_criteria(tt))
+
+    top_awarding_terms = root.findall("./cac:TenderingTerms/cac:AwardingTerms", namespaces=NS)
+    for at in top_awarding_terms:
+        results.extend(extract_award_criteria(at))
+
+    return results
+
 
 def extract_country(root):
     paths = [
-        # BEST: contracting authority
-        ".//cac:ContractingParty//cbc:IdentificationCode",
-
-        # fallback: project location
-        ".//cac:ProcurementProject//cbc:IdentificationCode",
+        ".//cac:ContractingParty//cac:PostalAddress/cac:Country/cbc:IdentificationCode",
+        ".//cac:ProcurementProject//cac:RealizedLocation/cac:Address/cac:Country/cbc:IdentificationCode",
     ]
 
     for p in paths:
@@ -207,35 +253,51 @@ def extract_country(root):
 
     return None
 
+def extract_selection_criteria(node):
+    results = []
+
+    for sc in node.findall(".//efac:SelectionCriteria", namespaces=NS):
+        desc = sc.findtext(".//cbc:Description", namespaces=NS)
+        if desc and desc.strip():
+            results.append({
+                "text": desc.strip(),
+                "type": "eligibility"
+            })
+
+    return results
 
 def extract_lots(root):
     lots = []
-
     lot_nodes = root.findall(".//cac:ProcurementProjectLot", namespaces=NS)
 
     for lot in lot_nodes:
-        lot_id = lot.findtext(".//cbc:ID", namespaces=NS)
-        lot_name = lot.findtext(".//cbc:Name", namespaces=NS)
-        lot_desc = lot.findtext(".//cbc:Description", namespaces=NS)
+        lot_id = lot.findtext("./cbc:ID", namespaces=NS)
+        lot_name = lot.findtext(".//cac:ProcurementProject/cbc:Name", namespaces=NS)
+        lot_desc = lot.findtext(".//cac:ProcurementProject/cbc:Description", namespaces=NS)
 
-        # value (optional per lot)
-        value_node = lot.find(".//cbc:EstimatedOverallContractAmount", namespaces=NS)
-        lot_value = None
+        value = None
         currency = None
 
+        value_node = lot.find(
+            ".//efbc:FrameworkMaximumAmount",
+            namespaces=NS
+        )
         if value_node is not None and value_node.text:
             try:
-                lot_value = float(value_node.text)
+                value = float(value_node.text.strip())
                 currency = value_node.get("currencyID")
-            except:
+            except Exception:
                 pass
+
+        requirements = extract_selection_criteria(lot)
 
         lots.append({
             "id": lot_id,
             "name": lot_name,
             "description": lot_desc,
-            "value": lot_value,
-            "currency": currency
+            "estimated_value": value,
+            "currency": currency,
+            "requirements": requirements
         })
 
     return lots
@@ -245,16 +307,19 @@ def parse_xml(xml_bytes):
 
 def extract_opportunity(root):
     value, currency = extract_value(root)
-
+    org_map=build_org_map(root)
     return {
         "title": extract_title(root),
         "description": extract_description(root),
+        "buyer_name": extract_buyer_name(root, org_map),
         "buyer_country": extract_country(root),
+        "publication_date": extract_publication_date(root),
+        "documents_url": extract_documents_url(root),
         "estimated_value": value,
         "currency": currency,
         "deadline": extract_deadline(root),
         "lots": extract_lots(root),
-        "requirements": extract_requirements(root)
+        "requirements": extract_global_requirements(root)
     }
     
 
@@ -309,13 +374,16 @@ def process_notice(queue, db, notice_id, xml_bucket):
         opportunity = Opportunity(
             external_source="TED",
             external_id=external_id,
+            buyer_name=parsed["buyer_name"],
             buyer_country=parsed["buyer_country"],
+            publication_date=parse_date(parsed["publication_date"]),
+            deadline=parse_date(parsed["deadline"]),
             title=parsed["title"],
             description=parsed["description"],
             estimated_value=parsed["estimated_value"],
             currency=parsed["currency"],
-            deadline=parse_date(parsed["deadline"]),
             source_url=xml_url,
+            documents_url=parsed["documents_url"],
             raw_payload=raw,
             status="new"
         )
@@ -326,11 +394,30 @@ def process_notice(queue, db, notice_id, xml_bucket):
         for r in parsed["requirements"]:
             db.add(Requirement(
                 opportunity_id=opportunity.id,
+                lot_id=None,
                 text=r["text"],
                 type=r["type"],
                 source="ted_xml"
             ))
-
+        for lot_data in parsed["lots"]:
+            lot = Lot(
+                opportunity_id=opportunity.id,
+                external_lot_id=lot_data["id"],
+                title=lot_data["name"],
+                description=lot_data["description"],
+                estimated_value=lot_data["estimated_value"],
+                currency=lot_data["currency"],
+            )
+            db.add(lot)
+            db.flush()
+            for r in lot_data["requirements"]:
+                db.add(Requirement(
+                opportunity_id=None,
+                lot_id=lot.id,
+                text=r["text"],
+                type=r["type"],
+                source="ted_xml"
+            ))
     else:
         db.add(OpportunityUpdate(
             opportunity_id=opportunity.id,

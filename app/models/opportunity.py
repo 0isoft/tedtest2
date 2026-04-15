@@ -30,6 +30,7 @@ class Opportunity(Base):
     documents_url = Column(Text, nullable=True) #tender docs page
 
     requirements = relationship("Requirement", back_populates="opportunity")
+    lots = relationship("Lot", back_populates="opportunity")
     updates = relationship("OpportunityUpdate", back_populates="opportunity")
 
     raw_payload = Column(JSON, nullable=False)
