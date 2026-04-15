@@ -78,7 +78,7 @@ def run_ingestion_worker():
         
 
         try:
-            didingest=False
+            
             #pull from the db the configs and picks the highest priority, amonst the ones that is active
             configs = db.query(IngestionConfig)\
             .filter_by(is_active=True)\
@@ -112,7 +112,7 @@ def run_ingestion_worker():
                         country=config.country,
                         cpv_code=config.cpv_code,
                     )
-                    if inserted>0: didingest=True
+                    
 
                     config.last_run_at = now
                     config.failure_count = 0
@@ -135,16 +135,21 @@ def run_ingestion_worker():
             # queue. for this, whenever queue=[] no matter why that happens, do a quick search
             # in db for unprocessed notices that are not dead notices and enqueue them again
             
-            if not didingest and queue.length() == 0:
-                print("[RECOVERY] Queue empty, checking DB...")
+            target_queue_size = 50
+            current_size = queue.length()
+
+            if current_size < target_queue_size:
+                print(f"[RECOVERY] Queue low ({current_size}), checking DB...")
+
+                missing = target_queue_size - current_size
 
                 pending = (
-                        db.query(RawNotice)
-                        .filter(RawNotice.processed == False)
-                        .filter(RawNotice.retry_count < 5)
-                        .order_by(RawNotice.ingested_at.asc())
-                        .limit(50)
-                        .all()
+                    db.query(RawNotice)
+                    .filter(RawNotice.processed == False)
+                    .filter(RawNotice.retry_count < 5)
+                    .order_by(RawNotice.ingested_at.asc())
+                    .limit(missing)
+                    .all()
                 )
 
                 for notice in pending:
