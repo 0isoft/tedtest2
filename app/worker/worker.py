@@ -289,7 +289,7 @@ def extract_lots(root):
             except Exception:
                 pass
 
-        requirements = extract_selection_criteria(lot)
+        requirements = (extract_selection_criteria(lot) + extract_award_criteria(lot))
 
         lots.append({
             "id": lot_id,
